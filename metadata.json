@@ -1,0 +1,6 @@
+{
+  "name": "AI Business Intelligence Copilot",
+  "description": "An agentic multi-agent business intelligence dashboard that cleans data, extracts business insights, predicts forecasts, structures PowerPoint slides, and enables natural language chat over tabular workbooks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_DATA_VISUALIZATION"]
+}

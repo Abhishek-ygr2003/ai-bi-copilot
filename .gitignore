@@ -1,0 +1,17 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Python / Local Model Files
+.venv/
+*.gguf
+
+# Large Datasets
+assets/walmart_finetuning_data.json
+finetune/dataset.json
+assets/walmart_store_sales_forecasting.csv

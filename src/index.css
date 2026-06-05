@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+@layer base {
+  html {
+    font-family: 'Outfit', sans-serif;
+  }
+}
+
+@layer utilities {
+  .mesh-bg {
+    background-color: #030014;
+    background-image: 
+      radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+      radial-gradient(at 50% 0%, hsla(225,39%,30%,0.15) 0, transparent 50%), 
+      radial-gradient(at 100% 0%, hsla(339,49%,30%,0.15) 0, transparent 50%);
+  }
+
+  .glass-panel {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl;
+  }
+
+  .glass-card {
+    @apply bg-white/[0.03] backdrop-blur-lg border border-white/5 hover:border-white/15 transition-all duration-300;
+  }
+
+  .glass-input {
+    @apply bg-black/40 backdrop-blur-md border border-white/10 focus:border-sky-500/50 focus:bg-black/60 transition-all duration-300;
+  }
+}
