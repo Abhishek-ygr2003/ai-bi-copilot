@@ -103,10 +103,19 @@ export interface AgentResult {
 // ---------------------------------------------------------------------------
 
 function tryParseJson<T>(raw: string): T | null {
-  const cleaned = raw.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
+  let cleaned = raw.trim();
+  cleaned = cleaned.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
   try {
     return JSON.parse(cleaned) as T;
   } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]) as T;
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
 }

@@ -163,7 +163,8 @@ async function buildPdfBuffer(report: ExecutiveReport, profile?: DatasetProfile 
 }
 
 async function buildPptxBuffer(report: ExecutiveReport, profile?: DatasetProfile | null, forecast?: ForecastResult | null): Promise<Buffer> {
-  const pptx = new PptxGenJS();
+  const PptxGen = (PptxGenJS as any).default || PptxGenJS;
+  const pptx = new PptxGen();
   pptx.layout = "LAYOUT_WIDE";
   pptx.author = "AI Business Intelligence Copilot";
   pptx.company = "Local BI";

@@ -15,3 +15,6 @@ coverage/
 assets/walmart_finetuning_data.json
 finetune/dataset.json
 assets/walmart_store_sales_forecasting.csv
+
+# Temporary Scratch Files
+scratch/

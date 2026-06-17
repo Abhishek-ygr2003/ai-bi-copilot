@@ -310,14 +310,24 @@ function findMetricsByPattern(metrics: ColumnMetric[], patterns: string[]): Colu
 function findBestNumericMetric(metrics: ColumnMetric[]): ColumnMetric | undefined {
   const scored = metrics
     .filter((metric) => metric.type === "number")
-    .map((metric) => ({
-      metric,
-      score:
+    .map((metric) => {
+      const normalizedName = normalizeKey(metric.name);
+      const looksLikeId = ID_PATTERNS.some((pattern) => normalizedName.includes(normalizeKey(pattern)));
+      const mean = metric.mean ?? 1;
+      const cv = mean !== 0 ? Math.min(1.5, (metric.stdDev ?? 0) / Math.abs(mean)) : 0;
+
+      let score =
         patternScore(metric.name, BUSINESS_TERMS.revenue) * 5 +
         patternScore(metric.name, BUSINESS_TERMS.profit) * 4 +
         patternScore(metric.name, BUSINESS_TERMS.quantity) * 2 +
-        (metric.stdDev ?? 0),
-    }))
+        cv;
+
+      if (looksLikeId) {
+        score -= 50; // Heavily penalize ID-like fields (Row ID, Order ID, Postal Code)
+      }
+
+      return { metric, score };
+    })
     .sort((left, right) => right.score - left.score);
 
   return scored[0]?.metric ?? metrics.find((metric) => metric.type === "number");
@@ -630,7 +640,14 @@ function buildChartCards(dataset: Dataset, metrics: ColumnMetric[]): ChartCard[]
 
   if (numericMetrics.length >= 2) {
     const first = findBestNumericMetric(metrics);
-    const second = numericMetrics.find((metric) => metric.name !== first?.name);
+    let secondCandidates = numericMetrics.filter(
+      (metric) => metric.name !== first?.name &&
+      !ID_PATTERNS.some((pattern) => normalizeKey(metric.name).includes(normalizeKey(pattern)))
+    );
+    if (secondCandidates.length === 0) {
+      secondCandidates = numericMetrics.filter((metric) => metric.name !== first?.name);
+    }
+    const second = secondCandidates.length > 0 ? findBestNumericMetric(secondCandidates) : undefined;
     if (first && second) {
       const scatterData = dataset.rows
         .map((row) => {
@@ -949,7 +966,15 @@ function formatRankingTable(rows: DatasetRow[], categoryField: string, valueFiel
 function buildTrendAnswer(dataset: Dataset, metrics: ColumnMetric[], query: string): QuestionAnswer {
   const dateMetric = findDateMetric(metrics);
   const numericMetric = findMetricsByPattern(metrics, BUSINESS_TERMS.revenue).find((metric) => metric.type === "number") ?? findBestNumericMetric(metrics);
-  const comparisonMetric = metrics.find((metric) => metric.type === "number" && metric.name !== numericMetric?.name);
+  let comparisonCandidates = metrics.filter(
+    (metric) => metric.type === "number" &&
+    metric.name !== numericMetric?.name &&
+    !ID_PATTERNS.some((pattern) => normalizeKey(metric.name).includes(normalizeKey(pattern)))
+  );
+  if (comparisonCandidates.length === 0) {
+    comparisonCandidates = metrics.filter((metric) => metric.type === "number" && metric.name !== numericMetric?.name);
+  }
+  const comparisonMetric = comparisonCandidates.length > 0 ? findBestNumericMetric(comparisonCandidates) : undefined;
 
   if (!dateMetric || !numericMetric) {
     return {
