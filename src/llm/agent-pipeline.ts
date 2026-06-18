@@ -36,11 +36,17 @@ export type Phi3CallFn = (
   systemPrompt?: string
 ) => Promise<string>;
 
-/** Call Qwen BI Analyst via HuggingFace API */
+export interface QwenCallResponse {
+  text: string;
+  source: "local-ollama" | "hf-inference" | "none";
+  modelUsed: string;
+}
+
+/** Call Qwen BI Analyst via Ollama or HuggingFace fallback */
 export type QwenCallFn = (
   prompt: string,
   systemPromptOverride?: string
-) => Promise<string>;
+) => Promise<QwenCallResponse>;
 
 // ---------------------------------------------------------------------------
 // Shared types (re-exported for server.ts + UI)
@@ -243,19 +249,20 @@ export class AgentPipelineService {
     const prompt = this.buildQwenPrompt(ctx, intent, ragText);
 
     try {
-      const result = await this.callQwen(prompt, QWEN_BI_SYSTEM);
-      if (result.trim()) {
+      const response = await this.callQwen(prompt, QWEN_BI_SYSTEM);
+      if (response && response.text.trim()) {
+        const backendName = response.source === "local-ollama" ? "Local Ollama" : "HuggingFace API";
         trace.push(makeLog(
           trace.length,
           "Qwen BI Analyst",
-          "Abhishekygr/qwen2.5-3b-bi-analyst",
-          "BI Specialist (HuggingFace)",
+          response.modelUsed,
+          `BI Specialist (${backendName})`,
           `Intent: ${intent} | RAG docs: ${ragCtx.retrievedCount} | Evidence: ${ctx.evidence.length}`,
-          result.slice(0, 130) + (result.length > 130 ? "…" : ""),
+          response.text.slice(0, 130) + (response.text.length > 130 ? "…" : ""),
           Date.now() - t0,
           "success"
         ));
-        return { text: result, usedFallback: false };
+        return { text: response.text, usedFallback: response.source === "none" };
       }
       throw new Error("Empty response from Qwen");
     } catch (err) {
@@ -264,9 +271,9 @@ export class AgentPipelineService {
         trace.length,
         "Qwen BI Analyst",
         "Abhishekygr/qwen2.5-3b-bi-analyst",
-        "BI Specialist (HuggingFace)",
+        "BI Specialist (Fallback)",
         `Intent: ${intent}`,
-        `HF unavailable — using base answer. ${msg}`,
+        `Qwen unavailable — using base answer. ${msg}`,
         Date.now() - t0,
         "fallback",
         msg
@@ -374,17 +381,19 @@ export class AgentPipelineService {
     const mode: AgentMode = ctx.mode ?? "standard";
     const trace: AgentStepLog[] = [];
 
-    // ── Step 1: Deterministic intent classification (0ms, no LLM) ──────────
-    const routerResult = router(ctx.query);
+    // ── Step 1: Semantic query routing classification ──────────────────────
+    const tStartRouter = Date.now();
+    const routerResult = await router(ctx.query);
+    const routerDuration = Date.now() - tStartRouter;
 
     trace.push(makeLog(
       trace.length,
       "Query Router",
-      "deterministic/keyword",
-      "Intent Classifier",
+      "Xenova/all-MiniLM-L6-v2 + keywords",
+      "Semantic Router",
       `"${ctx.query.slice(0, 80)}"`,
       `→ ${routerResult.route} [${routerResult.intent}] (${routerResult.confidence} conf, matched: ${routerResult.matchedKeywords.slice(0, 3).join(", ")})`,
-      0,
+      routerDuration,
       "success"
     ));
 

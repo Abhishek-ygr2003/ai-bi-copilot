@@ -49,6 +49,29 @@ if ($existingModel) {
     }
 }
 
+# Setup custom BI analyst model from local GGUF
+Write-Host "Checking for custom local BI analyst model..." -ForegroundColor Cyan
+$existingBiModel = ollama list 2>$null | Select-String "qwen2.5-bi-analyst"
+if ($existingBiModel) {
+    Write-Host "✅ qwen2.5-bi-analyst is already registered in Ollama" -ForegroundColor Green
+} else {
+    $ggufPath = Join-Path "finetune" "qwen2.5-bi-analyst-q8_0.gguf"
+    $modelfilePath = Join-Path "finetune" "Modelfile"
+    if (Test-Path $ggufPath) {
+        Write-Host "Registering custom BI Specialist model (qwen2.5-bi-analyst) in Ollama..." -ForegroundColor Yellow
+        Write-Host "Running: ollama create qwen2.5-bi-analyst -f $modelfilePath"
+        ollama create qwen2.5-bi-analyst -f $modelfilePath
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ Custom qwen2.5-bi-analyst model created successfully!" -ForegroundColor Green
+        } else {
+            Write-Host "❌ Failed to create qwen2.5-bi-analyst model" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "⚠️ Custom GGUF model not found at $ggufPath" -ForegroundColor Yellow
+        Write-Host "  The app will fall back to HuggingFace or standard model if not registered." -ForegroundColor Gray
+    }
+}
+
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  Next Steps" -ForegroundColor Cyan
@@ -59,9 +82,10 @@ Write-Host "   ollama serve"
 Write-Host ""
 Write-Host "2. In another terminal, verify it works:" -ForegroundColor Yellow
 Write-Host "   ollama run phi3:mini `"Hello`""
+Write-Host "   ollama run qwen2.5-bi-analyst `"Hi`""
 Write-Host ""
 Write-Host "3. Start the BI Copilot app:" -ForegroundColor Yellow
 Write-Host "   npm run dev"
 Write-Host ""
-Write-Host "4. Open http://localhost:5173 in your browser" -ForegroundColor Yellow
+Write-Host "4. Open http://localhost:3000 in your browser" -ForegroundColor Yellow
 Write-Host ""

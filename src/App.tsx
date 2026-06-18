@@ -8,6 +8,7 @@ import {
   ForecastResult,
   AgentMode,
   PipelineStep,
+  ChartCard,
 } from "./types";
 import {
   applyDatasetAction,
@@ -17,6 +18,7 @@ import {
   formatCompactNumber,
   rebuildDataset,
   titleCase,
+  buildCustomChartData,
 } from "./lib/analytics";
 import Sidebar from "./components/Sidebar";
 import CustomChart from "./components/CustomCharts";
@@ -135,10 +137,14 @@ export default function App() {
     model: "phi3:mini + bi-analyst",
     baseUrl: "http://localhost:11434",
   });
-  /** Dual-model pipeline mode: standard (4-step) or expert (2-step critique) */
+  /** Dual-model pipeline mode: standard, expert, or interpreter */
   const [agentMode, setAgentMode] = useState<AgentMode>("standard");
   /** Latest pipeline trace from the most recent chat response */
   const [pipelineTrace, setPipelineTrace] = useState<PipelineStep[] | undefined>(undefined);
+  /** Customized dashboard visual cards */
+  const [customCharts, setCustomCharts] = useState<ChartCard[]>([]);
+  /** Current index of the dashboard chart being customized */
+  const [editingChartIdx, setEditingChartIdx] = useState<number | null>(null);
 
   const numericColumns = useMemo(
     () => dataset?.metrics.filter((metric) => metric.type === "number").map((metric) => metric.name) ?? [],
@@ -230,6 +236,8 @@ export default function App() {
     setActiveAgent("Data Analyst");
 
     const nextProfile = refreshProfile(loadedDataset);
+    setCustomCharts(nextProfile.chartCards);
+    setEditingChartIdx(null);
     const seededLogs: AgentLog[] = [
       ...parsedLogs.map((message) => createLogEntry("System", message, "info")),
       createLogEntry("System", `Workbook ${loadedDataset.name} is now ready for local profiling.`, "success"),
@@ -338,6 +346,7 @@ export default function App() {
           dataset,
           profile,
           forecast: forecastResult,
+          customCharts,
         }),
       });
 
@@ -588,25 +597,191 @@ export default function App() {
                       </div>
                     </div>
 
-                    {chartCards.length > 0 ? (
+                    <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-sky-400" />
+                        <h4 className="font-bold text-xs uppercase tracking-wider text-white">Visual Analytics Dashboard</h4>
+                      </div>
+                      <button
+                        onClick={() => {
+                          if (!dataset) return;
+                          const defaultCategory = dataset.headers.find(h => dataset.metrics.find(m => m.name === h)?.type !== "number") || dataset.headers[0];
+                          const defaultNumeric = dataset.headers.find(h => dataset.metrics.find(m => m.name === h)?.type === "number") || dataset.headers[0];
+                          const newChart: ChartCard = {
+                            type: "bar",
+                            title: `Custom Visual: ${titleCase(defaultNumeric)} by ${titleCase(defaultCategory)}`,
+                            xAxisKey: defaultCategory,
+                            yAxisKey: defaultNumeric,
+                            colorTheme: "violet",
+                            data: [],
+                          };
+                          setCustomCharts(prev => [...prev, newChart]);
+                          setEditingChartIdx(customCharts.length);
+                          addLog("Dashboard Agent", "Added a new custom visual configuration.", "info");
+                        }}
+                        className="bg-sky-600 hover:bg-sky-500 text-white font-semibold text-[10.5px] px-3 py-1.5 rounded-xl transition cursor-pointer"
+                      >
+                        + Add Custom Visual
+                      </button>
+                    </div>
+
+                    {customCharts.length > 0 ? (
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                        {chartCards.map((chart) => (
-                          <div key={chart.title} className="glass-card p-4 rounded-2xl h-[340px]">
-                            <CustomChart
-                              type={chart.type}
-                              title={chart.title}
-                              data={chart.data}
-                              xAxisKey={chart.xAxisKey}
-                              yAxisKey={chart.yAxisKey}
-                              colorTheme={chart.colorTheme || "violet"}
-                              height={250}
-                            />
-                          </div>
-                        ))}
+                        {customCharts.map((chart, idx) => {
+                          const safeX = dataset?.headers.includes(chart.xAxisKey) ? chart.xAxisKey : dataset?.headers[0] || "";
+                          const safeY = chart.yAxisKey === "count" || dataset?.headers.includes(chart.yAxisKey) ? chart.yAxisKey : "count";
+                          
+                          const chartData = dataset 
+                            ? buildCustomChartData(dataset.rows, safeX, safeY, chart.type)
+                            : [];
+
+                          const isEditing = editingChartIdx === idx;
+
+                          return (
+                            <div key={idx} className={`glass-card p-4 rounded-2xl flex flex-col justify-between transition-all duration-300 border ${
+                              isEditing ? "border-sky-500/40 bg-sky-500/[0.02]" : "border-white/5 bg-[#161618]"
+                            }`} style={{ height: isEditing ? "480px" : "360px" }}>
+                              
+                              <div className="flex justify-between items-center border-b border-white/5 pb-2 mb-3">
+                                {isEditing ? (
+                                  <div className="flex gap-2 items-center flex-1">
+                                    <input
+                                      type="text"
+                                      value={chart.title}
+                                      onChange={(e) => {
+                                        const next = [...customCharts];
+                                        next[idx] = { ...next[idx], title: e.target.value };
+                                        setCustomCharts(next);
+                                      }}
+                                      className="bg-black/40 border border-white/15 text-xs rounded px-2.5 py-1 flex-1 text-white focus:outline-none focus:border-sky-500 font-sans"
+                                      placeholder="Enter Visual Title"
+                                    />
+                                    <button
+                                      onClick={() => setEditingChartIdx(null)}
+                                      className="text-[10.5px] bg-sky-600 hover:bg-sky-500 text-white font-semibold px-3 py-1 rounded-lg cursor-pointer transition shadow-sm"
+                                    >
+                                      Save
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <h5 className="font-sans font-semibold text-xs text-white truncate max-w-[200px]" title={chart.title}>
+                                      {chart.title}
+                                    </h5>
+                                    <div className="flex gap-1.5 select-none shrink-0">
+                                      <button
+                                        onClick={() => setEditingChartIdx(idx)}
+                                        className="text-gray-400 hover:text-white transition text-[9.5px] font-semibold bg-white/5 border border-white/10 px-2 py-1 rounded-lg cursor-pointer"
+                                      >
+                                        Customize
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          const next = customCharts.filter((_, i) => i !== idx);
+                                          setCustomCharts(next);
+                                          addLog("Dashboard Agent", `Removed visual '${chart.title}'.`, "info");
+                                        }}
+                                        className="text-rose-450 hover:text-rose-400 transition text-[9.5px] font-semibold bg-rose-500/10 border border-rose-500/20 px-2 py-1 rounded-lg cursor-pointer"
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+
+                              <div className="flex-1 min-h-0">
+                                <CustomChart
+                                  type={chart.type}
+                                  title=""
+                                  data={chartData}
+                                  xAxisKey={chart.type === "pie" ? "label" : safeX}
+                                  yAxisKey={chart.type === "pie" ? "value" : (safeY === "count" ? "Count" : safeY)}
+                                  colorTheme={chart.colorTheme || "violet"}
+                                  height={isEditing ? 180 : 250}
+                                />
+                              </div>
+
+                              {isEditing && (
+                                <div className="grid grid-cols-2 gap-3 mt-3 border-t border-white/5 pt-3 text-[10px] text-gray-400 select-none animate-fadeIn font-mono">
+                                  <div>
+                                    <label className="block mb-1 font-bold uppercase tracking-wider text-gray-500">Visual Type</label>
+                                    <select
+                                      value={chart.type}
+                                      onChange={(e) => {
+                                        const next = [...customCharts];
+                                        next[idx] = { ...next[idx], type: e.target.value as any };
+                                        setCustomCharts(next);
+                                      }}
+                                      className="bg-black/50 border border-white/10 rounded-xl px-2.5 py-1.5 w-full text-white text-[11px] outline-none focus:border-sky-500"
+                                    >
+                                      <option value="bar">Bar Chart</option>
+                                      <option value="line">Line Chart</option>
+                                      <option value="area">Area Chart</option>
+                                      <option value="pie">Pie Chart</option>
+                                      <option value="scatter">Scatter Plot</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="block mb-1 font-bold uppercase tracking-wider text-gray-500">Color Theme</label>
+                                    <select
+                                      value={chart.colorTheme || "violet"}
+                                      onChange={(e) => {
+                                        const next = [...customCharts];
+                                        next[idx] = { ...next[idx], colorTheme: e.target.value as any };
+                                        setCustomCharts(next);
+                                      }}
+                                      className="bg-black/50 border border-white/10 rounded-xl px-2.5 py-1.5 w-full text-white text-[11px] outline-none focus:border-sky-500"
+                                    >
+                                      <option value="violet">Sky Blue (Violet)</option>
+                                      <option value="emerald">Emerald Green</option>
+                                      <option value="amber">Amber Yellow</option>
+                                      <option value="rose">Rose Red</option>
+                                      <option value="cyan">Cyan Blue</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="block mb-1 font-bold uppercase tracking-wider text-gray-500">X-Axis (Category)</label>
+                                    <select
+                                      value={chart.xAxisKey}
+                                      onChange={(e) => {
+                                        const next = [...customCharts];
+                                        next[idx] = { ...next[idx], xAxisKey: e.target.value };
+                                        setCustomCharts(next);
+                                      }}
+                                      className="bg-black/50 border border-white/10 rounded-xl px-2.5 py-1.5 w-full text-white text-[11px] outline-none focus:border-sky-500"
+                                    >
+                                      {dataset?.headers.map((h) => (
+                                        <option key={h} value={h}>{h}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="block mb-1 font-bold uppercase tracking-wider text-gray-500">Y-Axis (Measure)</label>
+                                    <select
+                                      value={chart.yAxisKey}
+                                      onChange={(e) => {
+                                        const next = [...customCharts];
+                                        next[idx] = { ...next[idx], yAxisKey: e.target.value };
+                                        setCustomCharts(next);
+                                      }}
+                                      className="bg-black/50 border border-white/10 rounded-xl px-2.5 py-1.5 w-full text-white text-[11px] outline-none focus:border-sky-500"
+                                    >
+                                      <option value="count">Record Count (Count)</option>
+                                      {dataset?.headers.map((h) => (
+                                        <option key={h} value={h}>{h}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <div className="rounded-2xl border border-dashed border-white/10 glass-card p-10 text-center text-sm text-gray-400">
-                        The workbook does not expose a strong chart pattern yet. Try a dataset with a date field and a numeric business metric.
+                        No visuals loaded. Click '+ Add Custom Visual' to start designing charts.
                       </div>
                     )}
 

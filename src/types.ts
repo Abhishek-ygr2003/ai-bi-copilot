@@ -95,7 +95,7 @@ export interface QuestionAnswer {
 // ---------------------------------------------------------------------------
 
 /** Determines which LLM pipeline to use for a response */
-export type AgentMode = "standard" | "expert";
+export type AgentMode = "standard" | "expert" | "interpreter";
 
 /** Per-step record in the dual-model pipeline execution trace */
 export interface PipelineStep {

@@ -367,7 +367,7 @@ function getDateValue(row: DatasetRow, field: string): Date | null {
   return coerceDate(row[field]);
 }
 
-function aggregateByCategory(rows: DatasetRow[], categoryField: string, numericField: string, limit = 10): DatasetRow[] {
+export function aggregateByCategory(rows: DatasetRow[], categoryField: string, numericField: string, limit = 10): DatasetRow[] {
   const buckets = new Map<string, number>();
 
   rows.forEach((row) => {
@@ -387,7 +387,7 @@ function aggregateByCategory(rows: DatasetRow[], categoryField: string, numericF
     .slice(0, limit);
 }
 
-function aggregateByCount(rows: DatasetRow[], field: string, limit = 10): DatasetRow[] {
+export function aggregateByCount(rows: DatasetRow[], field: string, limit = 10): DatasetRow[] {
   const buckets = new Map<string, number>();
 
   rows.forEach((row) => {
@@ -403,6 +403,59 @@ function aggregateByCount(rows: DatasetRow[], field: string, limit = 10): Datase
     .map(([label, value]) => ({ label, value }))
     .sort((left, right) => right.value - left.value)
     .slice(0, limit);
+}
+
+/**
+ * Builds custom aggregated data array for user-customized dashboard visuals.
+ */
+export function buildCustomChartData(
+  rows: DatasetRow[],
+  xAxisKey: string,
+  yAxisKey: string,
+  type: "bar" | "line" | "scatter" | "area" | "pie"
+): Record<string, any>[] {
+  if (type === "scatter") {
+    return rows
+      .map((row) => {
+        const xVal = coerceNumber(row[xAxisKey]);
+        const yVal = coerceNumber(row[yAxisKey]);
+        if (xVal === null || yVal === null) return null;
+        return {
+          [xAxisKey]: Number(xVal.toFixed(2)),
+          [yAxisKey]: Number(yVal.toFixed(2)),
+        };
+      })
+      .filter((v): v is Record<string, any> => v !== null)
+      .slice(0, 40);
+  }
+
+  if (type === "pie") {
+    const isYValid = yAxisKey && yAxisKey !== xAxisKey && yAxisKey !== "value" && yAxisKey !== "count";
+    if (!isYValid) {
+      const counts = aggregateByCount(rows, xAxisKey, 10);
+      return counts.map((item) => ({
+        label: item.label,
+        value: item.value,
+      }));
+    } else {
+      const grouped = aggregateByCategory(rows, xAxisKey, yAxisKey, 10);
+      return grouped.map((item) => ({
+        label: String(item[xAxisKey]),
+        value: Number(item[yAxisKey]),
+      }));
+    }
+  }
+
+  const isNumericY = yAxisKey && yAxisKey !== xAxisKey;
+  if (!isNumericY) {
+    const counts = aggregateByCount(rows, xAxisKey, 15);
+    return counts.map((item) => ({
+      [xAxisKey]: item.label,
+      [yAxisKey || "Count"]: item.value,
+    }));
+  }
+
+  return aggregateByCategory(rows, xAxisKey, yAxisKey, 15);
 }
 
 function buildOutlierCount(rows: DatasetRow[], metrics: ColumnMetric[]): number {
@@ -1248,18 +1301,58 @@ function buildForecastSummary(values: number[], predicted: number[], targetField
 }
 
 export function buildForecast(dataset: Dataset, labelField: string, targetField: string, horizon: number): ForecastResult {
-  const points = dataset.rows
-    .map((row, index) => ({
-      label: String(row[labelField] ?? `Row ${index + 1}`),
-      value: getNumericValue(row, targetField),
-      date: getDateValue(row, labelField),
+  // Parse all dates to determine the temporal span and appropriate aggregation granularity
+  const validDates = dataset.rows
+    .map((row) => getDateValue(row, labelField))
+    .filter((d): d is Date => d !== null && !Number.isNaN(d.getTime()));
+
+  let diffMonths = 0;
+  if (validDates.length > 0) {
+    const minTime = Math.min(...validDates.map((d) => d.getTime()));
+    const maxTime = Math.max(...validDates.map((d) => d.getTime()));
+    const minDate = new Date(minTime);
+    const maxDate = new Date(maxTime);
+    diffMonths = (maxDate.getFullYear() - minDate.getFullYear()) * 12 + (maxDate.getMonth() - minDate.getMonth());
+  }
+
+  // Aggregate transactional rows by grouping keys (monthly or daily)
+  const grouped = new Map<string, { sum: number; date: Date | null }>();
+
+  dataset.rows.forEach((row) => {
+    const val = getNumericValue(row, targetField);
+    if (val === null) return;
+
+    const date = getDateValue(row, labelField);
+    let key = "";
+    if (date && !Number.isNaN(date.getTime())) {
+      // If the dataset covers at least 5 months, group by month (YYYY-MM). Otherwise group by day (YYYY-MM-DD).
+      key = diffMonths >= 5
+        ? date.toISOString().slice(0, 7)
+        : date.toISOString().slice(0, 10);
+    } else {
+      key = String(row[labelField] ?? "");
+    }
+
+    if (!key) return;
+
+    const existing = grouped.get(key) ?? { sum: 0, date };
+    grouped.set(key, {
+      sum: existing.sum + val,
+      date: existing.date || date,
+    });
+  });
+
+  const points = Array.from(grouped.entries())
+    .map(([key, item]) => ({
+      label: key,
+      value: item.sum,
+      date: item.date,
     }))
-    .filter((point) => point.value !== null)
     .sort((left, right) => {
       if (left.date && right.date) {
         return left.date.getTime() - right.date.getTime();
       }
-      return 0;
+      return left.label.localeCompare(right.label);
     });
 
   const historical = points.map((point) => ({ label: point.label, value: Number(point.value!.toFixed(2)) }));
@@ -1490,6 +1583,37 @@ export function applyDatasetAction(dataset: Dataset, actionKey: string, columnNa
     });
 
     message = `Removed rows with extreme outlier values across numeric columns.`;
+  }
+
+  if (actionKey === "drop_duplicates") {
+    const signatures = new Set<string>();
+    updatedRows = rows.filter((row) => {
+      const signature = JSON.stringify(row, Object.keys(row).sort());
+      if (signatures.has(signature)) return false;
+      signatures.add(signature);
+      return true;
+    });
+    const diff = rows.length - updatedRows.length;
+    message = `Removed ${diff} duplicate row(s) from the workbook.`;
+  }
+
+  if (actionKey === "drop_column") {
+    const nextHeaders = headers.filter((h) => h !== columnName);
+    updatedRows = rows.map((row) => {
+      const nextRow = { ...row };
+      delete nextRow[columnName];
+      return nextRow;
+    });
+    message = `Dropped column '${columnName}' from the workbook.`;
+    return {
+      dataset: {
+        ...dataset,
+        headers: nextHeaders,
+        rows: updatedRows,
+        metrics: calculateColumnMetrics(nextHeaders, updatedRows),
+      },
+      message,
+    };
   }
 
   if (!message) {

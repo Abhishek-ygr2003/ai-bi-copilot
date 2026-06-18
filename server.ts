@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import dotenv from "dotenv";
+import fs from "fs";
 import PDFDocument from "pdfkit";
 import PptxGenJS from "pptxgenjs";
 import { createServer as createViteServer } from "vite";
@@ -13,12 +14,14 @@ import {
   formatNumber,
   titleCase,
 } from "./src/lib/analytics";
-import type { Dataset, DatasetProfile, ExecutiveReport, ForecastResult } from "./src/types";
+import type { Dataset, DatasetProfile, ExecutiveReport, ForecastResult, ChartCard } from "./src/types";
 import { ollamaClient } from "./models/client.js";
 import { PHI3_GENERAL_SYSTEM_PROMPT, PHI3_CRITIC_SYSTEM_PROMPT, QWEN_BI_SYSTEM_PROMPT, QWEN_LOCAL_MODEL } from "./models/config.js";
 import { AgentPipelineService, type AgentQueryContext, type AgentMode } from "./src/llm/agent-pipeline";
 import { ragService } from "./src/llm/rag";
 import { qwenBiClient } from "./src/llm/qwen-bi-client";
+import { runPythonCode } from "./src/llm/code-interpreter";
+import { buildPythonInterpreterPrompt, PYTHON_INTERPRETER_SYSTEM } from "./src/llm/prompts/python-interpreter";
 
 dotenv.config();
 
@@ -26,6 +29,7 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
 app.use(express.json({ limit: "100mb" }));
+app.use("/scratch", express.static(path.join(process.cwd(), "scratch")));
 
 // ---------------------------------------------------------------------------
 // Agent pipeline singleton (wires Ollama into the pipeline service)
@@ -35,34 +39,71 @@ app.use(express.json({ limit: "100mb" }));
 // Agent pipeline singleton — two separate callables injected
 // ---------------------------------------------------------------------------
 
-const agentPipeline = new AgentPipelineService(
-  // callPhi3: Phi-3 Mini via Ollama (general assistant + critic)
-  async (prompt: string, systemPromptOverride?: string) => {
-    try {
-      const sysPrompt = systemPromptOverride ?? PHI3_GENERAL_SYSTEM_PROMPT;
-      const response = await ollamaClient.chat(
-        { messages: [{ role: "user", content: prompt }] },
-        sysPrompt
-      );
-      return response?.message?.content?.trim() ?? "";
-    } catch {
-      return "";
+async function callPhi3Model(prompt: string, systemPromptOverride?: string): Promise<string> {
+  try {
+    const sysPrompt = systemPromptOverride ?? PHI3_GENERAL_SYSTEM_PROMPT;
+    const response = await ollamaClient.chat(
+      { messages: [{ role: "user", content: prompt }] },
+      sysPrompt
+    );
+    return response?.message?.content?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+async function callQwenAnalyst(prompt: string, systemOverride?: string) {
+  // 1. Try local Ollama first
+  try {
+    const sysPrompt = systemOverride ?? QWEN_BI_SYSTEM_PROMPT;
+    const response = await ollamaClient.chat(
+      { messages: [{ role: "user", content: prompt }] },
+      sysPrompt,
+      QWEN_LOCAL_MODEL
+    );
+    const content = response?.message?.content?.trim();
+    if (content) {
+      return {
+        text: content,
+        source: "local-ollama" as const,
+        modelUsed: QWEN_LOCAL_MODEL,
+      };
     }
-  },
-  // callQwen: Qwen2.5-3B BI Analyst via Ollama local instance
-  async (prompt: string, systemOverride?: string) => {
+  } catch (err: any) {
+    console.warn(`[Qwen BI] Local Ollama failed: ${err?.message || err}`);
+  }
+
+  // 2. Fall back to HuggingFace Inference API if local failed/offline
+  if (qwenBiClient.isConfigured) {
+    console.log(`[Qwen BI] Local model unavailable. Falling back to HuggingFace Inference API...`);
     try {
       const sysPrompt = systemOverride ?? QWEN_BI_SYSTEM_PROMPT;
-      const response = await ollamaClient.chat(
-        { messages: [{ role: "user", content: prompt }] },
-        sysPrompt,
-        QWEN_LOCAL_MODEL
-      );
-      return response?.message?.content?.trim() ?? "";
-    } catch {
-      return "";
+      const hfResult = await qwenBiClient.generateText(prompt, sysPrompt);
+      if (hfResult && hfResult.trim()) {
+        return {
+          text: hfResult.trim(),
+          source: "hf-inference" as const,
+          modelUsed: qwenBiClient.modelId,
+        };
+      }
+    } catch (err: any) {
+      console.error(`[Qwen BI] HuggingFace fallback failed: ${err?.message || err}`);
     }
+  } else {
+    console.warn(`[Qwen BI] Local model failed and HuggingFace API is not configured (missing HF_TOKEN).`);
   }
+
+  // 3. Complete failure fallback (empty response triggers deterministic base answer in agent pipeline)
+  return {
+    text: "",
+    source: "none" as const,
+    modelUsed: QWEN_LOCAL_MODEL,
+  };
+}
+
+const agentPipeline = new AgentPipelineService(
+  callPhi3Model,
+  callQwenAnalyst
 );
 
 // ---------------------------------------------------------------------------
@@ -162,7 +203,12 @@ async function buildPdfBuffer(report: ExecutiveReport, profile?: DatasetProfile 
   return await stream;
 }
 
-async function buildPptxBuffer(report: ExecutiveReport, profile?: DatasetProfile | null, forecast?: ForecastResult | null): Promise<Buffer> {
+async function buildPptxBuffer(
+  report: ExecutiveReport,
+  profile?: DatasetProfile | null,
+  forecast?: ForecastResult | null,
+  customCharts?: ChartCard[] | null
+): Promise<Buffer> {
   const PptxGen = (PptxGenJS as any).default || PptxGenJS;
   const pptx = new PptxGen();
   pptx.layout = "LAYOUT_WIDE";
@@ -187,41 +233,117 @@ async function buildPptxBuffer(report: ExecutiveReport, profile?: DatasetProfile
     ], { x, y, w, h, margin: 0.12, fill: { color: "111113", transparency: 2 }, line: { color: "1F2937", pt: 1 }, radius: 0.12 });
   };
 
-  let slide = pptx.addSlide();
-  addBaseSlide(slide);
-  slide.addText(report.title, { x: 0.6, y: 1.0, w: 11.8, h: 0.9, fontFace: "Aptos Display", fontSize: 24, bold: true, color: "FFFFFF" });
-  slide.addText(report.executiveSummary, { x: 0.6, y: 2.0, w: 11.8, h: 1.3, fontFace: "Aptos", fontSize: 14, color: "D1D5DB", margin: 0 });
+  // 1. Process Slide Deck
+  if (report.slideDeck?.length) {
+    for (const slideData of report.slideDeck) {
+      const slide = pptx.addSlide();
+      addBaseSlide(slide);
 
-  if (profile?.marketKPIs?.length) {
-    profile.marketKPIs.slice(0, 3).forEach((kpi, index) => {
-      addBox(slide, 0.6 + index * 4.15, 3.9, 3.8, 1.4, kpi.label, kpi.value, kpi.businessValue);
-    });
+      if (slideData.layout === "title") {
+        slide.addText(slideData.title, { x: 0.6, y: 1.0, w: 11.8, h: 0.9, fontFace: "Aptos Display", fontSize: 24, bold: true, color: "FFFFFF" });
+        if (slideData.subtitle) {
+          slide.addText(slideData.subtitle, { x: 0.6, y: 2.0, w: 11.8, h: 1.8, fontFace: "Aptos", fontSize: 13, color: "D1D5DB", margin: 0 });
+        }
+        // Add market KPIs at the bottom for cover slide
+        if (profile?.marketKPIs?.length && report.slideDeck[0]?.id === slideData.id) {
+          profile.marketKPIs.slice(0, 3).forEach((kpi, index) => {
+            addBox(slide, 0.6 + index * 4.15, 4.2, 3.8, 1.4, kpi.label, kpi.value, kpi.businessValue);
+          });
+        }
+      } else if (slideData.layout === "metrics") {
+        slide.addText(slideData.title, { x: 0.6, y: 0.8, w: 11.8, h: 0.4, fontFace: "Aptos Display", fontSize: 22, bold: true, color: "FFFFFF" });
+        if (slideData.metrics?.length) {
+          slideData.metrics.forEach((metric, index) => {
+            addBox(slide, 0.6 + index * 4.15, 2.0, 3.8, 1.8, metric.label, metric.value, metric.sub);
+          });
+        }
+      } else if (slideData.layout === "bullets") {
+        slide.addText(slideData.title, { x: 0.6, y: 0.8, w: 11.8, h: 0.4, fontFace: "Aptos Display", fontSize: 22, bold: true, color: "FFFFFF" });
+        if (slideData.bullets?.length) {
+          slideData.bullets.forEach((bullet, index) => {
+            slide.addText(bullet, {
+              x: 0.8,
+              y: 1.5 + index * 0.9,
+              w: 11.8,
+              h: 0.7,
+              fontFace: "Aptos",
+              fontSize: 12,
+              color: "E5E7EB",
+              margin: 0
+            });
+          });
+        }
+      } else if (slideData.layout === "chart") {
+        slide.addText(slideData.title, { x: 0.6, y: 0.8, w: 11.8, h: 0.4, fontFace: "Aptos Display", fontSize: 22, bold: true, color: "FFFFFF" });
+
+        const chartConfig = slideData.chartConfig;
+        if (chartConfig) {
+          // Find matching chart in custom charts or profile suggestions
+          const targetChart = customCharts?.find(c => c.title === chartConfig.title)
+            || profile?.chartCards?.find(c => c.title === chartConfig.title)
+            || customCharts?.[0]
+            || profile?.chartCards?.[0];
+
+          if (targetChart && targetChart.data?.length) {
+            let pptxChartType = pptx.ChartType.bar;
+            if (targetChart.type === "line") pptxChartType = pptx.ChartType.line;
+            else if (targetChart.type === "pie") pptxChartType = pptx.ChartType.pie;
+            else if (targetChart.type === "scatter") pptxChartType = pptx.ChartType.scatter;
+            else if (targetChart.type === "area") pptxChartType = pptx.ChartType.area;
+
+            const seriesName = targetChart.yAxisKey || "Value";
+            const labels = targetChart.data.map((row: any) => String(row[targetChart.xAxisKey] ?? ""));
+            const values = targetChart.data.map((row: any) => {
+              const v = parseFloat(row[targetChart.yAxisKey]);
+              return isNaN(v) ? 0 : v;
+            });
+
+            const pptxChartData = [
+              {
+                name: seriesName,
+                labels,
+                values
+              }
+            ];
+
+            slide.addChart(pptxChartType, pptxChartData, {
+              x: 0.6,
+              y: 1.5,
+              w: 12.0,
+              h: 4.8,
+              showLegend: targetChart.type === "pie",
+              legendPos: "r",
+              showTitle: false,
+              chartColors: ["38BDF8", "34D399", "06B6D4", "F59E0B", "F43F5E", "8B5CF6"],
+              valAxisLabelColor: "CBD5E1",
+              valAxisLineColor: "1F2937",
+              catAxisLabelColor: "CBD5E1",
+              catAxisLineColor: "1F2937",
+              titleColor: "FFFFFF",
+              legendColor: "CBD5E1",
+              valGridLine: { color: "1F2937", style: "solid" }
+            });
+          } else {
+            slide.addText("No chart data available.", {
+              x: 0.6, y: 1.5, w: 12, h: 4,
+              align: "center", fill: { color: "111113" }, line: { color: "1F2937", pt: 1 },
+              fontFace: "Aptos", fontSize: 14, color: "CBD5E1"
+            });
+          }
+        }
+      }
+    }
   }
 
-  slide = pptx.addSlide();
-  addBaseSlide(slide);
-  slide.addText("Key Findings", { x: 0.6, y: 0.8, w: 6, h: 0.4, fontFace: "Aptos Display", fontSize: 22, bold: true, color: "FFFFFF" });
-  report.keyFindings.slice(0, 4).forEach((finding, index) => {
-    slide.addText(`• ${finding.title}: ${finding.description}`, { x: 0.7, y: 1.45 + index * 1.15, w: 12, h: 0.9, fontFace: "Aptos", fontSize: 12, color: "E5E7EB", margin: 0 });
-  });
-
-  slide = pptx.addSlide();
-  addBaseSlide(slide);
-  slide.addText("Recommendations", { x: 0.6, y: 0.8, w: 6, h: 0.4, fontFace: "Aptos Display", fontSize: 22, bold: true, color: "FFFFFF" });
-  report.recommendations.slice(0, 5).forEach((recommendation, index) => {
-    slide.addText(`${index + 1}. ${recommendation}`, { x: 0.8, y: 1.5 + index * 0.9, w: 12, h: 0.6, fontFace: "Aptos", fontSize: 13, color: "E5E7EB", margin: 0 });
-  });
-
-  slide = pptx.addSlide();
-  addBaseSlide(slide);
-  slide.addText("Forecast Snapshot", { x: 0.6, y: 0.8, w: 6, h: 0.4, fontFace: "Aptos Display", fontSize: 22, bold: true, color: "FFFFFF" });
+  // 2. Forecast Slide (if present)
   if (forecast) {
+    const slide = pptx.addSlide();
+    addBaseSlide(slide);
+    slide.addText("Forecast Snapshot", { x: 0.6, y: 0.8, w: 6, h: 0.4, fontFace: "Aptos Display", fontSize: 22, bold: true, color: "FFFFFF" });
     slide.addText(`Confidence: ${forecast.confidence}%`, { x: 0.7, y: 1.4, w: 4, h: 0.4, fontFace: "Aptos", fontSize: 16, bold: true, color: "1D9BF0" });
     forecast.predicted.slice(0, 5).forEach((point, index) => {
       addBox(slide, 0.7 + index * 2.45, 2.1, 2.15, 1.7, point.label, formatCompactNumber(point.value), `Band ${formatCompactNumber(point.lower)} - ${formatCompactNumber(point.upper)}`);
     });
-  } else {
-    slide.addText("No forecast generated yet.", { x: 0.7, y: 1.4, w: 11.5, h: 0.6, fontFace: "Aptos", fontSize: 13, color: "CBD5E1" });
   }
 
   const raw = await pptx.write({ outputType: "nodebuffer" });
@@ -421,6 +543,145 @@ app.post("/api/chat", async (req, res) => {
 });
 
 /**
+ * Helper to serialize dataset payload to CSV in the scratch/ directory.
+ */
+function writeDatasetToCsv(dataset: Dataset): string {
+  const scratchDir = path.join(process.cwd(), "scratch");
+  if (!fs.existsSync(scratchDir)) {
+    fs.mkdirSync(scratchDir, { recursive: true });
+  }
+  const csvPath = path.join(scratchDir, "dataset.csv");
+
+  const escapeCell = (val: any) => {
+    if (val === null || val === undefined) return "";
+    const str = String(val);
+    if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  const headerLine = dataset.headers.map(escapeCell).join(",");
+  const rowLines = dataset.rows.map((row) =>
+    dataset.headers.map((h) => escapeCell(row[h])).join(",")
+  );
+  const csvContent = [headerLine, ...rowLines].join("\n");
+  fs.writeFileSync(csvPath, csvContent, "utf8");
+  return csvPath;
+}
+
+/**
+ * POST /api/chat/interpret
+ * Python Code Interpreter route.
+ * Generates and runs Python data analysis on local dataset securely.
+ */
+app.post("/api/chat/interpret", async (req, res) => {
+  try {
+    const dataset = ensureDataset(req.body);
+    const query = String(req.body?.query || "").trim();
+
+    if (!query) {
+      return res.status(400).json({ error: "Missing query parameter." });
+    }
+
+    // 1. Write dataset to scratch/dataset.csv
+    const datasetPath = writeDatasetToCsv(dataset);
+
+    // 2. Build Python generation prompt
+    const prompt = buildPythonInterpreterPrompt({
+      query,
+      datasetName: dataset.name,
+      headers: dataset.headers,
+      columns: dataset.metrics.map((m) => ({
+        name: m.name,
+        type: m.type,
+        distinctValues: m.distinctValues,
+      })),
+    });
+
+    // 3. Request python script from Qwen
+    const response = await callQwenAnalyst(prompt, PYTHON_INTERPRETER_SYSTEM);
+    let code = response.text.trim();
+
+    // Clean up code block backticks
+    const match = code.match(/```python([\s\S]*?)```/i);
+    if (match) {
+      code = match[1].trim();
+    } else {
+      const generalMatch = code.match(/```([\s\S]*?)```/);
+      if (generalMatch) {
+        code = generalMatch[1].trim();
+      }
+    }
+
+    const pipelineTrace: any[] = [
+      {
+        stepIndex: 0,
+        agentName: "Query Router",
+        model: "Manual override",
+        role: "Router",
+        inputSummary: `Interpreter mode: "${query.slice(0, 40)}..."`,
+        outputSummary: "Routed to Code Interpreter agent.",
+        durationMs: 0,
+        status: "success",
+      },
+      {
+        stepIndex: 1,
+        agentName: "Code Generator",
+        model: response.modelUsed,
+        role: `Code Generator (${response.source === "local-ollama" ? "Local Ollama" : response.source === "hf-inference" ? "HuggingFace API" : "None"})`,
+        inputSummary: `Columns: ${dataset.headers.length} | Prompt: "${query.slice(0, 30)}..."`,
+        outputSummary: `Generated python script (${code.split("\n").length} lines)`,
+        durationMs: 0,
+        status: response.source === "none" ? "error" : "success",
+      }
+    ];
+
+    if (!code) {
+      return res.json({
+        success: false,
+        stdout: "",
+        stderr: "Code generator returned an empty response. Verify local Ollama or HuggingFace configuration.",
+        code: "",
+        poweredBy: response.source === "none" ? "fallback" : "qwen-bi",
+        pipelineTrace,
+      });
+    }
+
+    // 4. Run the code in Python subprocess sandbox
+    const t0 = Date.now();
+    const interpretResult = await runPythonCode(code, datasetPath);
+    const duration = Date.now() - t0;
+
+    pipelineTrace.push({
+      stepIndex: 2,
+      agentName: "Code Interpreter",
+      model: "Python Subprocess",
+      role: "Sandbox Execution",
+      inputSummary: `Executing script: ${code.slice(0, 60)}...`,
+      outputSummary: interpretResult.success
+        ? `Finished successfully in ${duration}ms. Stdout: "${interpretResult.stdout.replace(/\n/g, " ").slice(0, 40)}..."`
+        : `Execution failed: ${interpretResult.error || interpretResult.stderr}`,
+      durationMs: duration,
+      status: interpretResult.success ? "success" : "error",
+      error: interpretResult.error,
+    });
+
+    res.json({
+      success: interpretResult.success,
+      stdout: interpretResult.stdout,
+      stderr: interpretResult.stderr,
+      code,
+      chartPath: interpretResult.chartPath,
+      poweredBy: response.source === "none" ? "fallback" : "qwen-bi",
+      pipelineTrace,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Internal Code Interpreter error." });
+  }
+});
+
+/**
  * POST /api/forecast
  * Pure deterministic forecast — no LLM involvement.
  */
@@ -494,12 +755,13 @@ app.post("/api/export/pptx", async (req, res) => {
     const profile = dataset ? ensureProfile(dataset, req.body) : null;
     const forecast = (req.body?.forecast as ForecastResult | null) || null;
     const report = (req.body?.report as ExecutiveReport | undefined) || (dataset && profile ? buildExecutiveReport(dataset, profile, forecast) : null);
+    const customCharts = req.body?.customCharts as ChartCard[] | undefined;
 
     if (!report) {
       return res.status(400).json({ error: "Report payload is required." });
     }
 
-    const buffer = await buildPptxBuffer(report, profile, forecast);
+    const buffer = await buildPptxBuffer(report, profile, forecast, customCharts);
     jsonResponseBuffer(res, buffer, "application/vnd.openxmlformats-officedocument.presentationml.presentation", `${report.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.pptx`);
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "Unable to export PowerPoint." });

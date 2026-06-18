@@ -1,62 +1,96 @@
-# 🚀 AI Business Intelligence Copilot
-**A privacy-preserving, local-first BI copilot powered by Dual-Model AI**
+# 🚀 Local-First AI Business Intelligence Copilot
+**A privacy-preserving, enterprise-grade local BI copilot powered by a Dual-Model AI pipeline, a sandboxed Python interpreter, and persistent vector databases.**
 
 ---
 
 ## 📖 Overview
 
-The **AI Business Intelligence Copilot** is a powerful, locally-hosted platform that allows you to upload raw datasets (CSV/Excel) and immediately gain actionable insights. Powered entirely by local LLMs via Ollama, it ensures that your sensitive business data never leaves your machine. 
+The **AI Business Intelligence Copilot** is a 100% offline, local-first platform designed to ingest raw datasets (CSV/Excel), compile automated diagnostic profiles, clean transactional data, perform statistical forecasting, execute sandboxed Python calculations, and export native PowerPoint and PDF executive reports—all completely on your local machine. 
 
-By employing a **Dual-Model Architecture**, the copilot intelligently routes general queries to a lightweight assistant and complex data analytical queries to a specialized, fine-tuned BI analyst model, providing fast, accurate, and structured insights even on low-VRAM hardware (e.g., 4GB VRAM).
-
-## ✨ Key Features
-
-- 📊 **Automated Data Profiling**: Instantly analyzes uploaded datasets for missing values, outliers, duplicate records, correlations, and distributions.
-- 💬 **Natural Language Querying**: Ask complex questions about your data in plain English and receive instant, context-aware answers.
-- 📈 **Statistical Forecasting**: Run predictive modeling on time-series data with calculated confidence intervals.
-- 📑 **Executive Reporting**: Automatically compile insights into highly formatted, professional PDF summaries and PowerPoint (PPTX) slide decks.
-- 🔒 **100% Local & Private**: No cloud APIs, no data telemetry. Everything runs on your hardware using `llama.cpp` and `Ollama`.
+By employing a **Dual-Model Architecture** alongside a **Semantic Query Router**, the copilot orchestrates high-speed, structured analysis. It classifies queries and routes them dynamically to either a lightweight generalist assistant, a fine-tuned data specialist, or a secure local Python interpreter. This allows for fluid, private, and fast data analytics even on standard consumer hardware.
 
 ---
 
-## 🧠 Dual-Model Architecture
+## ✨ Key Features
 
-To optimize performance on consumer hardware, this copilot utilizes a specialized dual-model workflow:
+### 1. Ingestion, Profiling, & Dynamic Data Cleaning
+* **Automated Dataset Profiling**: Ingests Excel/CSV files, checks data quality scores, measures completeness ratios, identifies outliers, and extracts key business metrics.
+* **Inline Cleaning Actions**: Interactively drop redundant columns, remove duplicate rows, or fill missing cells using median statistical fallbacks directly within the data grid.
 
-1. **The Orchestrator / Critic (`phi3:mini`)**: A highly efficient generalist model responsible for understanding user intent, managing conversational context, and formatting output.
-2. **The BI Specialist (`qwen2.5-bi-analyst` - Custom GGUF)**: A fine-tuned Qwen 2.5 3B model optimized for structured data analysis, KPI extraction, and complex reasoning over tabular datasets.
+### 2. Dual-Model Intent Router
+* **Semantic Vector Routing**: Classifies queries via local sentence embeddings (`@xenova/transformers`) mapped against semantic intent centroids.
+* **Orchestrator & Specialist Separation**: 
+  * **General Assistant/Critic (`phi3:mini`)** handles platform guides, socratic critiques, and textual reviews.
+  * **BI Analyst (`qwen2.5-bi-analyst`)** extracts KPI formulas, handles churn indicators, and structures narrative briefs.
 
-### Workflow: Query Routing
+### 3. Secure Python Code Interpreter
+* **AST Validation Engine**: Pre-scans user scripts utilizing Python's Abstract Syntax Tree parser to block dynamic import escapes, object graph traversal, and code injection.
+* **Local Sandbox Subprocess**: Runs calculations safely with a 15-second child-process timeout, loading the dataset pre-filtered.
+* **Matplotlib Dark Mode Integration**: Automatically captures plot images drawn in Matplotlib and styles them to match the system's unified elegant dark theme.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Router as Next.js API (Router)
-    participant Phi3 as Phi-3 Mini (Orchestrator)
-    participant Qwen as Qwen 2.5 BI Analyst (Specialist)
-    
-    User->>Router: "What is our Q3 revenue trend?"
-    Router->>Phi3: Analyze Intent
-    Phi3-->>Router: Intent = "DATA_ANALYSIS"
-    Router->>Qwen: Send Dataset Schema + Query
-    Qwen-->>Router: Returns KPIs, Trends, and JSON structure
-    Router->>Phi3: Format output for User
-    Phi3-->>Router: Final Human-readable response
-    Router-->>User: Display Insights & Charts
-```
+### 4. Interactive Visual Customizer
+* **Client-Side Real-Time Aggregation**: Customize dashboard metrics, categorical axes, chart formats (Bar, Line, Area, Pie, Scatter), and visual color palettes.
+* **Dynamic Reflows**: Visually customize any card inline and watch the charts re-plot instantly.
 
-### Workflow: Data Ingestion & Profiling
+### 5. Report Generation Pipelines
+* **Native PPTX Charts**: Exports structured presentations using `pptxgenjs` where chart layouts contain native, fully editable charts.
+* **Formatted PDFs**: Generates printable executive summaries via `pdfkit`.
 
+---
+
+## 🏗️ System Architecture
+
+### Component Diagram
 ```mermaid
 graph TD
-    A[User Uploads CSV/Excel] --> B[Parse Data Buffer]
-    B --> C{Profile Dataset}
-    C --> D[Identify Data Types]
-    C --> E[Detect Missing Values/Outliers]
-    C --> F[Calculate Correlations]
-    D & E & F --> G[Generate Profile Metadata]
-    G --> H[Vectorize Schema for RAG Context]
-    H --> I[Ready for User Queries]
+    User["User Interaction (UI)"] --> App["Vite React Dashboard"]
+    App --> Chat["Chat Panel & Visual Customizer"]
+    App --> Clean["Data Grid & Cleaner Tools"]
+    Chat --> Router["Xenova Semantic Router"]
+    
+    Router -->|General/Help| Phi3["Ollama Phi-3 Mini"]
+    Router -->|Quantitative BI| Qwen["Ollama Qwen 2.5 BI Analyst"]
+    Router -->|Python Exec| PySandbox["Local Python Sandbox"]
+    
+    PySandbox --> AST["check_ast.py (AST Code Checker)"]
+    PySandbox --> PySub["Python 3 Subprocess (15s Timeout)"]
+    PySub --> Pandas["Pandas Data Manipulation"]
+    PySub --> Matplotlib["Matplotlib Elegant Dark Plotting"]
+    
+    App --> Export["Report Generator (PDFKit & PptxGenJS)"]
+    Export --> PDF["Binary PDF Document"]
+    Export --> PPTX["Native Editable PPTX Slides"]
+```
+
+### Python Sandbox Execution Flow
+```mermaid
+sequenceDiagram
+    participant UI as Vite React Client
+    participant Express as Node Express Server
+    participant AST as AST Checker (Python Process)
+    participant Subprocess as Python Interpreter Process
+    participant FS as File System
+    
+    UI->>Express: POST /api/chat/interpret (query + dataset)
+    Express->>FS: Write dataset to scratch/dataset.csv
+    Express->>AST: Send code block via stdin (check_ast.py)
+    alt Code is malicious or traverses object graph
+        AST-->>Express: Return exit code 1 (Security Violation)
+        Express-->>UI: Return 400 (Validation Error)
+    else Code is clean
+        AST-->>Express: Return exit code 0 (VALID)
+        Express->>Subprocess: Spawn child process (python run_[id].py)
+        Note over Subprocess: Load pandas/numpy<br/>Set Agg Matplotlib backend<br/>Set Elegant Dark styles
+        Subprocess->>FS: Read scratch/dataset.csv
+        Subprocess->>Subprocess: Execute generated user code
+        opt User drew a plot
+            Subprocess->>FS: Save chart to scratch/chart.png
+        end
+        Subprocess-->>Express: Return stdout, stderr, exit code
+        Express->>FS: Rename scratch/chart.png -> scratch/chart_[id].png
+        Express->>FS: Delete scratch/run_[id].py
+        Express-->>UI: Return execution results & chartPath
+    end
 ```
 
 ---
@@ -64,52 +98,76 @@ graph TD
 ## 🚀 Getting Started
 
 ### Prerequisites
-- **Node.js**: v20 or higher.
-- **Ollama**: Installed and running locally.
-- **Hardware**: Minimum 8GB RAM (4GB VRAM recommended for dual-model execution).
+* **Node.js**: v20 or higher.
+* **Python 3**: Installed on the system path (required for sandbox calculations & plotting).
+* **Ollama**: Installed and running locally.
+* **Hardware**: Minimum 8GB RAM (4GB VRAM recommended for dual-model execution).
 
-### Installation
+### Installation & Local Setup
 
-1. **Clone the repository:**
+1. **Clone the Repository**:
    ```bash
    git clone https://github.com/AbhiSTDW/ai-bi-copilot.git
    cd ai-bi-copilot
    ```
 
-2. **Install dependencies:**
+2. **Install Node Dependencies**:
    ```bash
    npm install
    ```
 
-3. **Configure Environment:**
-   Copy the example environment file and configure it:
-   ```bash
-   cp .env.example .env.local
+3. **Configure Environment Variables**:
+   Create a `.env` file in the project root:
+   ```env
+   PORT=3000
+   OLLAMA_BASE_URL=http://localhost:11434
+   CHROMADB_URL=http://localhost:8000
    ```
 
-4. **Setup Local Models in Ollama:**
-   Pull the general assistant model:
+4. **Pull Ollama Models**:
    ```bash
+   # Generalist / Critic model
    ollama pull phi3:mini
    ```
-   *Note: For the BI Analyst model, use the custom `qwen2.5-bi-analyst` GGUF provided in the `finetune/` directory or swap to `llama3.2:3b-instruct` in your `.env.local`.*
 
-5. **Run the Application:**
+5. **Setup Specialist GGUF weights**:
+   If utilizing the custom fine-tuned `qwen2.5-bi-analyst` model, run the automated setup PowerShell script:
+   ```powershell
+   ./setup-model.ps1
+   ```
+   *Note: This creates the specialist profile using the GGUF weights in `finetune/`.*
+
+6. **Start the Application**:
    ```bash
    npm run dev
    ```
-
-6. Open your browser and navigate to `http://localhost:3000`.
+   Open `http://localhost:3000` in your web browser.
 
 ---
 
-## 🛠️ Tech Stack
+## 🧪 Testing & Verification
 
-- **Frontend**: Next.js 14, React, Tailwind CSS, Chart.js, Framer Motion
-- **Backend**: Next.js API Routes, Node.js
-- **AI Inference**: Ollama, `llama.cpp`
-- **Data Processing**: SheetJS, PDFKit, PptxGenJS
+All verification tests are organized inside the `tests/` directory and can be executed via package managers:
+
+* **Relocated Test Suite (Standard Pipelines)**:
+  Verifies server health, ingestion profiling, statistical forecasts, intent classification, socratic expert reviews, and PDF/PPTX exporters.
+  ```bash
+  npm run test
+  ```
+
+* **Python Interpreter & Sandbox Tests**:
+  Verifies AST static code validations, mathematical computations, matplotlib dark theme exports, and malicious bypass blocks.
+  ```bash
+  npm run test:interpreter
+  ```
+
+* **Real-World Superstore Dataset Stress Test**:
+  Runs ingestion, predictive analysis, and slide compilation against the full 10k Superstore records.
+  ```bash
+  npm run test:superstore
+  ```
+
+---
 
 ## 📄 License
-
-This project is licensed under the MIT License.
+This project is licensed under the Apache 2.0 License.

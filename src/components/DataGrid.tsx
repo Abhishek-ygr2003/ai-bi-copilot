@@ -211,11 +211,11 @@ export default function DataGrid({ dataset, onCleanDataset, onUpdateCell }: Data
                 {/* Agent 1 Data Cleaner action suggestion bar */}
                 <div className="border-t border-white/5 pt-3 mt-4 flex items-center justify-between gap-2">
                   <span className="text-[9px] text-gray-500 font-medium font-mono">Auto-Cleaner Actions:</span>
-                  <div className="flex gap-1">
+                  <div className="flex gap-1.5 items-center">
                     {metric.missingCount > 0 && (
                       <button
                         onClick={() => onCleanDataset("fill_median", metric.name)}
-                        className="bg-sky-500/10 border border-sky-500/20 text-sky-400 font-semibold hover:bg-sky-500/20 text-[10px] px-2.5 py-1 rounded transition cursor-pointer"
+                        className="bg-sky-500/10 border border-sky-500/20 text-sky-400 font-semibold hover:bg-sky-500/20 text-[10px] px-2 py-1 rounded transition cursor-pointer"
                         title="Impute Null files with average/median values"
                       >
                         Impute Nulls
@@ -223,10 +223,17 @@ export default function DataGrid({ dataset, onCleanDataset, onUpdateCell }: Data
                     )}
                     <button
                       onClick={() => onCleanDataset("drop_null", metric.name)}
-                      className="border border-white/10 hover:bg-rose-500/10 hover:text-rose-455 text-[10px] p-1 rounded transition cursor-pointer text-gray-400"
+                      className="border border-white/10 hover:bg-rose-500/10 hover:text-rose-500 text-[10px] p-1 rounded transition cursor-pointer text-gray-400"
                       title="Drop rows where this column is missing"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => onCleanDataset("drop_column", metric.name)}
+                      className="bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 text-rose-400 font-semibold text-[10px] px-2 py-1 rounded transition cursor-pointer"
+                      title="Delete this column from the dataset"
+                    >
+                      Drop Column
                     </button>
                   </div>
                 </div>
@@ -245,12 +252,20 @@ export default function DataGrid({ dataset, onCleanDataset, onUpdateCell }: Data
               </div>
             </div>
             
-            <button
-              onClick={() => onCleanDataset("remove_outliers", "*")}
-              className="bg-sky-600 hover:bg-sky-500 text-white font-semibold text-[10px] px-3.5 py-2 rounded-xl transition cursor-pointer"
-            >
-              Impute Comprehensive Outliers (Z-Score)
-            </button>
+            <div className="flex gap-2.5">
+              <button
+                onClick={() => onCleanDataset("drop_duplicates", "*")}
+                className="border border-white/10 hover:bg-white/5 text-gray-300 font-semibold text-[10px] px-3.5 py-2 rounded-xl transition cursor-pointer"
+              >
+                Drop Duplicate Rows
+              </button>
+              <button
+                onClick={() => onCleanDataset("remove_outliers", "*")}
+                className="bg-sky-600 hover:bg-sky-500 text-white font-semibold text-[10px] px-3.5 py-2 rounded-xl transition cursor-pointer"
+              >
+                Impute Comprehensive Outliers (Z-Score)
+              </button>
+            </div>
           </div>
         </div>
       )}

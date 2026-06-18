@@ -61,6 +61,8 @@ function getAgentColor(name: string): string {
       return "bg-purple-500/10 text-purple-400 border-purple-500/20";
     case "RAG Engine":
       return "bg-amber-500/10 text-amber-400 border-amber-500/20";
+    case "Code Interpreter":
+      return "bg-amber-500/10 text-amber-400 border-amber-500/20";
     default:
       return "bg-white/5 text-gray-300 border-white/10";
   }
@@ -161,6 +163,12 @@ const AGENT_LIST = [
     color: "bg-purple-500/10 text-purple-400 border-purple-500/20",
   },
   {
+    name: "Code Interpreter",
+    shortLabel: "PY",
+    desc: "Executes Python code sandboxed locally for complex math & custom plots",
+    color: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+  },
+  {
     name: "Phi-3 Mini",
     shortLabel: "PHI3",
     desc: "General assistant, app guidance, Expert Mode critic (Ollama local)",
@@ -232,50 +240,57 @@ export default function AgentPanel({
         )}
       </div>
 
-      {/* Expert Mode Toggle */}
-      <div className="px-3 py-2.5 bg-black/20 border-b border-white/5 flex items-center justify-between">
-        <div>
+      {/* Pipeline Mode Selectors */}
+      <div className="px-3 py-2.5 bg-black/20 border-b border-white/5 space-y-2">
+        <div className="flex justify-between items-center select-none">
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
             Pipeline Mode
           </p>
-          <p className="text-[9.5px] text-gray-600 mt-0.5">
-            {agentMode === "expert"
-              ? "Qwen → Phi-3 Critique → Merge"
-              : "Router → Qwen BI → Phi-3 Review"}
-          </p>
-        </div>
-        <button
-          id="expert-mode-toggle"
-          type="button"
-          onClick={() => onAgentModeChange?.(agentMode === "expert" ? "standard" : "expert")}
-          className={`relative flex items-center h-6 w-12 rounded-full border transition-all duration-300 cursor-pointer ${
+          <span className={`text-[8.5px] font-bold font-mono px-1.5 py-0.5 rounded border ${
             agentMode === "expert"
-              ? "bg-violet-600/40 border-violet-500/60"
-              : "bg-white/5 border-white/15"
-          }`}
-          title={agentMode === "expert" ? "Switch to Standard Mode" : "Switch to Expert Mode"}
-        >
-          <span
-            className={`absolute w-4 h-4 rounded-full shadow transition-all duration-300 flex items-center justify-center ${
-              agentMode === "expert"
-                ? "left-7 bg-violet-400"
-                : "left-1 bg-gray-400"
+              ? "text-violet-400 bg-violet-500/10 border-violet-500/25"
+              : agentMode === "interpreter"
+              ? "text-amber-400 bg-amber-500/10 border-amber-500/25"
+              : "text-sky-400 bg-sky-500/10 border-sky-500/25"
+          }`}>
+            {agentMode === "expert" ? "Expert" : agentMode === "interpreter" ? "Python" : "Standard"}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-3 bg-black/40 p-0.5 rounded-xl border border-white/5 select-none">
+          <button
+            onClick={() => onAgentModeChange?.("standard")}
+            className={`text-[9.5px] font-semibold py-1 rounded-lg transition-all cursor-pointer text-center ${
+              agentMode === "standard" ? "bg-white/5 text-white border border-white/5 shadow-xs" : "text-gray-450 hover:text-white"
             }`}
           >
-            {agentMode === "expert" ? (
-              <FlaskConical className="w-2.5 h-2.5 text-violet-900" />
-            ) : (
-              <Sparkles className="w-2.5 h-2.5 text-gray-700" />
-            )}
-          </span>
-        </button>
-        <span className={`text-[9px] font-bold font-mono px-1.5 py-0.5 rounded border ml-2 ${
-          agentMode === "expert"
-            ? "text-violet-400 bg-violet-500/10 border-violet-500/25"
-            : "text-sky-400 bg-sky-500/10 border-sky-500/25"
-        }`}>
-          {agentMode === "expert" ? "Expert" : "Standard"}
-        </span>
+            Standard
+          </button>
+          <button
+            onClick={() => onAgentModeChange?.("expert")}
+            className={`text-[9.5px] font-semibold py-1 rounded-lg transition-all cursor-pointer text-center ${
+              agentMode === "expert" ? "bg-white/5 text-white border border-white/5 shadow-xs" : "text-gray-455 hover:text-white"
+            }`}
+          >
+            Expert
+          </button>
+          <button
+            onClick={() => onAgentModeChange?.("interpreter")}
+            className={`text-[9.5px] font-semibold py-1 rounded-lg transition-all cursor-pointer text-center ${
+              agentMode === "interpreter" ? "bg-white/5 text-white border border-white/5 shadow-xs" : "text-gray-455 hover:text-white"
+            }`}
+          >
+            Python
+          </button>
+        </div>
+
+        <p className="text-[9.5px] text-gray-500 leading-normal">
+          {agentMode === "expert"
+            ? "Specialist analysis with Phi-3 critical review validation."
+            : agentMode === "interpreter"
+            ? "Write and execute local Python code for complex math & matplotlib charts."
+            : "Direct routing to local Qwen BI specialist or general Phi-3 assistant."}
+        </p>
       </div>
 
       {/* Agent Registry */}

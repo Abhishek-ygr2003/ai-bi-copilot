@@ -9,7 +9,9 @@
  *   5. Session persistence via localStorage (browser) or in-memory (server)
  */
 
-import { pipeline, type FeatureExtractionPipeline } from "@xenova/transformers";
+import { env, pipeline, type FeatureExtractionPipeline } from "@xenova/transformers";
+import path from "path";
+import { ChromaClient } from "chromadb";
 import type {
   RAGDocument,
   RAGDocumentMetadata,
@@ -99,6 +101,9 @@ export class RAGService {
   private extractor: FeatureExtractionPipeline | null = null;
   private documents: RAGDocument[] = [];
   private ready = false;
+  private chromaClient: ChromaClient | null = null;
+  private chromaCollection: any = null;
+  private useChroma = false;
 
   // -------------------------------------------------------------------------
   // Initialization
@@ -106,10 +111,36 @@ export class RAGService {
 
   async init(): Promise<void> {
     if (this.ready) return;
+    // Configure local cache directory inside project root for offline-first compliance
+    env.cacheDir = path.join(process.cwd(), ".cache", "transformers");
     this.extractor = await pipeline(
       "feature-extraction",
       "Xenova/all-MiniLM-L6-v2"
     );
+
+    // Initialize ChromaDB if available
+    try {
+      const chromaUrl = process.env.CHROMA_URL || "http://localhost:8000";
+      this.chromaClient = new ChromaClient({ path: chromaUrl });
+      
+      // Ping server with timeout
+      const version = await Promise.race([
+        this.chromaClient.version(),
+        new Promise<null>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 2000))
+      ]);
+
+      if (version) {
+        this.chromaCollection = await this.chromaClient.getOrCreateCollection({
+          name: "bi_copilot_rag"
+        });
+        this.useChroma = true;
+        console.log(`[RAG] Successfully connected to persistent ChromaDB at ${chromaUrl}`);
+      }
+    } catch (err) {
+      console.log("[RAG] ChromaDB server not reachable. Using in-memory vector storage fallback.");
+      this.useChroma = false;
+    }
+
     this.ready = true;
   }
 
@@ -138,16 +169,34 @@ export class RAGService {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const embedding = await this.embed(chunk);
+      const docId = `${uid()}-c${i}`;
+      const title = chunks.length > 1 ? `${metadata.title} [${i + 1}/${chunks.length}]` : metadata.title;
+
       const doc: RAGDocument = {
-        id: `${uid()}-c${i}`,
+        id: docId,
         text: chunk,
         metadata: {
           ...metadata,
-          title: chunks.length > 1 ? `${metadata.title} [${i + 1}/${chunks.length}]` : metadata.title,
+          title,
         },
         embedding,
       };
-      this.documents.push(doc);
+
+      if (this.useChroma && this.chromaCollection) {
+        try {
+          await this.chromaCollection.add({
+            ids: [doc.id],
+            embeddings: [doc.embedding],
+            metadatas: [doc.metadata as any],
+            documents: [doc.text]
+          });
+        } catch (err) {
+          console.warn("[RAG] Failed to add to ChromaDB. Falling back to in-memory store:", err);
+          this.documents.push(doc);
+        }
+      } else {
+        this.documents.push(doc);
+      }
     }
   }
 
@@ -273,8 +322,6 @@ export class RAGService {
     query: string,
     options: RAGSearchOptions = {}
   ): Promise<RAGSearchResult[]> {
-    if (this.documents.length === 0) return [];
-
     const {
       topK = DEFAULT_TOP_K,
       filterDocTypes,
@@ -282,6 +329,81 @@ export class RAGService {
       hybridAlpha = DEFAULT_HYBRID_ALPHA,
       minScore = 0.1,
     } = options;
+
+    if (this.useChroma && this.chromaCollection) {
+      try {
+        const queryEmbedding = await this.embed(query);
+        const queryTokens = tokenise(query);
+
+        // Build Chroma metadata filter
+        const whereClause: any = {};
+        const filters: any[] = [];
+        
+        if (filterDatasetId) {
+          filters.push({ datasetId: filterDatasetId });
+        }
+        if (filterDocTypes && filterDocTypes.length > 0) {
+          if (filterDocTypes.length === 1) {
+            filters.push({ docType: filterDocTypes[0] });
+          } else {
+            filters.push({ docType: { $in: filterDocTypes } });
+          }
+        }
+
+        if (filters.length > 1) {
+          whereClause["$and"] = filters;
+        } else if (filters.length === 1) {
+          Object.assign(whereClause, filters[0]);
+        }
+
+        const res = await this.chromaCollection.query({
+          queryEmbeddings: [queryEmbedding],
+          nResults: topK * 2, // retrieve extra for reranking/filtering
+          ...(filters.length > 0 ? { where: whereClause } : {})
+        });
+
+        if (res && res.ids && res.ids[0] && res.ids[0].length > 0) {
+          const results: RAGSearchResult[] = [];
+          const ids = res.ids[0];
+          const metadatas = res.metadatas[0];
+          const documents = res.documents[0];
+          const distances = res.distances ? res.distances[0] : null;
+
+          for (let i = 0; i < ids.length; i++) {
+            const docText = documents[i] || "";
+            const meta = metadatas[i] as unknown as RAGDocumentMetadata;
+            
+            // Chroma L2 distance: d = 2 * (1 - similarity) -> similarity = 1 - d/2
+            const distance = distances ? distances[i] : 1;
+            const similarityScore = Math.max(0, 1 - (distance / 2));
+            
+            const kwScore = keywordScore(queryTokens, docText);
+            const finalScore = hybridAlpha * similarityScore + (1 - hybridAlpha) * kwScore;
+
+            if (finalScore >= minScore) {
+              results.push({
+                document: {
+                  id: ids[i],
+                  text: docText,
+                  metadata: meta
+                },
+                similarityScore,
+                keywordScore: kwScore,
+                finalScore
+              });
+            }
+          }
+
+          return results
+            .sort((a, b) => b.finalScore - a.finalScore)
+            .slice(0, topK);
+        }
+      } catch (err) {
+        console.warn("[RAG] ChromaDB query failed. Falling back to in-memory search:", err);
+      }
+    }
+
+    if (this.documents.length === 0) return [];
 
     const queryEmbedding = await this.embed(query);
     const queryTokens = tokenise(query);
@@ -350,7 +472,17 @@ export class RAGService {
   // -------------------------------------------------------------------------
 
   /** Remove all documents for a specific dataset */
-  clearDataset(datasetId: string): void {
+  async clearDataset(datasetId: string): Promise<void> {
+    if (this.useChroma && this.chromaCollection) {
+      try {
+        await this.chromaCollection.delete({
+          where: { datasetId }
+        });
+        console.log(`[RAG] Cleared ChromaDB documents for dataset "${datasetId}"`);
+      } catch (err) {
+        console.warn("[RAG] Failed to clear dataset in ChromaDB:", err);
+      }
+    }
     const before = this.documents.length;
     this.documents = this.documents.filter(
       (d) => d.metadata.datasetId !== datasetId
@@ -359,7 +491,20 @@ export class RAGService {
   }
 
   /** Clear the entire document store */
-  clearAll(): void {
+  async clearAll(): Promise<void> {
+    if (this.useChroma && this.chromaCollection && this.chromaClient) {
+      try {
+        await this.chromaClient.deleteCollection({
+          name: "bi_copilot_rag"
+        });
+        this.chromaCollection = await this.chromaClient.getOrCreateCollection({
+          name: "bi_copilot_rag"
+        });
+        console.log("[RAG] Deleted and recreated ChromaDB collection");
+      } catch (err) {
+        console.warn("[RAG] Failed to clear all in ChromaDB:", err);
+      }
+    }
     this.documents = [];
     console.log("[RAG] Cleared all documents");
   }

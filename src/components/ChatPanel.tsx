@@ -147,7 +147,9 @@ function PoweredByBadge({ poweredBy, mode }: { poweredBy?: string; mode?: AgentM
 
 function ThinkingIndicator({ mode, route }: { mode: AgentMode; route?: string }) {
   const isBi = route === "qwen-bi" || mode === "expert";
-  const steps = mode === "expert"
+  const steps = mode === "interpreter"
+    ? ["Writing Python script...", "Executing local subprocess...", "Drawing Matplotlib plots...", "Returning results..."]
+    : mode === "expert"
     ? ["Qwen BI Analyst analysing…", "Phi-3 reviewing critique…", "Synthesising…"]
     : isBi
       ? ["Routing to BI Analyst…", "Qwen generating analysis…", "Formatting response…"]
@@ -241,7 +243,8 @@ export default function ChatPanel({
     onSetProcessing(true);
 
     try {
-      const response = await fetch("/api/chat", {
+      const endpoint = agentMode === "interpreter" ? "/api/chat/interpret" : "/api/chat";
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -267,31 +270,56 @@ export default function ChatPanel({
         onPipelineTrace(data.pipelineTrace);
       }
 
-      let chartSuggestion: any = undefined;
-      if (data.chartSuggestion?.data?.length > 0) {
-        chartSuggestion = {
-          type: data.chartSuggestion.type || "bar",
-          title: data.chartSuggestion.title || "Visual Comparison",
-          xAxisKey: data.chartSuggestion.xAxisKey || "label",
-          yAxisKey: data.chartSuggestion.yAxisKey || "value",
-          data: data.chartSuggestion.data,
+      let aiMsg: ChatMessage;
+
+      if (agentMode === "interpreter") {
+        let text = "";
+        if (data.success) {
+          text = `### 💻 Python Code Execution Output\n\n\`\`\`\n${data.stdout.trim() || "(No console output)"}\n\`\`\`\n\n#### 📝 Generated Script:\n\`\`\`python\n${data.code.trim()}\n\`\`\``;
+        } else {
+          text = `### ❌ Code Execution Failed\n\n**Error Details:**\n\`\`\`\n${data.stderr.trim() || data.error || "Unknown runtime compilation error"}\n\`\`\`\n\n#### 📝 Generated Script Attempt:\n\`\`\`python\n${data.code.trim()}\n\`\`\``;
+        }
+
+        aiMsg = {
+          id: (Date.now() + 1).toString(),
+          sender: "assistant",
+          text,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          agentMode: "interpreter",
+          poweredBy: data.poweredBy,
+          pipelineTrace: data.pipelineTrace,
+        };
+
+        if (data.chartPath) {
+          (aiMsg as any).chartPath = data.chartPath;
+        }
+      } else {
+        let chartSuggestion: any = undefined;
+        if (data.chartSuggestion?.data?.length > 0) {
+          chartSuggestion = {
+            type: data.chartSuggestion.type || "bar",
+            title: data.chartSuggestion.title || "Visual Comparison",
+            xAxisKey: data.chartSuggestion.xAxisKey || "label",
+            yAxisKey: data.chartSuggestion.yAxisKey || "value",
+            data: data.chartSuggestion.data,
+          };
+        }
+
+        aiMsg = {
+          id: (Date.now() + 1).toString(),
+          sender: "assistant",
+          text: data.answerMarkdown || "I could not find a distinct answer to your request.",
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          chartSuggestion,
+          reviewStatus: data.reviewStatus,
+          agentMode: data.mode || agentMode,
+          poweredBy: data.poweredBy,
+          pipelineTrace: data.pipelineTrace,
+          ragContext: data.ragContext
+            ? { retrievedCount: data.ragContext.retrievedCount, sources: data.ragContext.sources }
+            : undefined,
         };
       }
-
-      const aiMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: "assistant",
-        text: data.answerMarkdown || "I could not find a distinct answer to your request.",
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        chartSuggestion,
-        reviewStatus: data.reviewStatus,
-        agentMode: data.mode || agentMode,
-        poweredBy: data.poweredBy,
-        pipelineTrace: data.pipelineTrace,
-        ragContext: data.ragContext
-          ? { retrievedCount: data.ragContext.retrievedCount, sources: data.ragContext.sources }
-          : undefined,
-      };
 
       onAddMessage(aiMsg);
     } catch (error: any) {
@@ -406,6 +434,27 @@ export default function ChatPanel({
             {/* Debug trace — hidden by default */}
             {msg.pipelineTrace && msg.pipelineTrace.length > 0 && (
               <DebugTrace steps={msg.pipelineTrace} />
+            )}
+
+            {/* Python Generated Chart */}
+            {(msg as any).chartPath && (
+              <div className="w-full mt-3 border border-white/5 rounded-2xl overflow-hidden bg-black/15 max-w-sm sm:max-w-md shadow-xs animate-fadeIn">
+                <img
+                  src={(msg as any).chartPath}
+                  alt="Python generated chart visualization"
+                  className="w-full h-auto max-h-[300px] object-contain"
+                />
+                <div className="bg-black/40 border-t border-white/5 p-2 flex items-center justify-between text-[9px] text-gray-500 font-mono">
+                  <span>Matplotlib Export</span>
+                  <a
+                    href={(msg as any).chartPath}
+                    download="python_chart.png"
+                    className="text-sky-450 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    Download PNG
+                  </a>
+                </div>
+              </div>
             )}
 
             {/* Inline chart */}

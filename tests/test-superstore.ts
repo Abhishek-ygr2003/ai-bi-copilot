@@ -1,5 +1,6 @@
 import assert from "assert";
 import fs from "fs";
+import path from "path";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -62,7 +63,6 @@ function parseCSVText(rawText: string) {
     const obj: any = {};
     headers.forEach((h, idx) => {
       const val = line[idx] ? line[idx].trim() : "";
-      // Clean numeric formatting if any
       const numericText = val.replace(/[$€£,\s]/g, "");
       if (/^-?\d+(\.\d+)?$/.test(numericText)) {
         obj[h] = Number(numericText);
@@ -175,7 +175,6 @@ async function main() {
 
   // 3. Query Routing
   await runTest("Query Router Intent Matching on Real-World Business Queries", async () => {
-    // Router test A: Quantitative BI query
     const resA = await fetch(`${BASE_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -191,7 +190,6 @@ async function main() {
     assert.strictEqual(dataA.routerResult.route, "qwen-bi", "Should route BI questions to qwen-bi");
     assert.strictEqual(dataA.routerResult.intent, "kpi_query");
 
-    // Router test B: General query
     const resB = await fetch(`${BASE_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
